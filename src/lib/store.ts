@@ -211,7 +211,15 @@ export const memoryStore = initMemoryState();
 
 // Helper to check if database is online
 export async function isDatabaseConnected(): Promise<boolean> {
-  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes("placeholder") || process.env.DATABASE_URL.includes("ep-cool-mountain")) {
+  const dbUrl =
+    process.env.DATABASE_URL ||
+    process.env.STORAGE_URL ||
+    process.env.STORAGE_DATABASE_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.POSTGRES_URL ||
+    "";
+
+  if (!dbUrl || dbUrl.includes("placeholder") || dbUrl.includes("ep-cool-mountain")) {
     return false;
   }
   try {
