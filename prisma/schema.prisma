@@ -1,0 +1,295 @@
+// Prisma schema for CVET - AI ATS CV Builder (Neon PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum PaymentStatus {
+  PENDING
+  VERIFYING
+  APPROVED
+  REJECTED
+  MANUAL_REVIEW
+}
+
+enum FolderType {
+  CV_UPLOADS
+  GENERATED_PDFS
+  PAYMENT_SCREENSHOTS
+  ATS_REPORTS
+}
+
+enum RuleSeverity {
+  CRITICAL
+  WARNING
+  INFO
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  passwordHash String
+  name         String
+  phone        String?
+  role         Role          @default(USER)
+  status       UserStatus    @default(ACTIVE)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  cvs          CV[]
+  atsScans     AtsScan[]
+  payments     Payment[]
+  files        FileRecord[]
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model CV {
+  id                String            @id @default(cuid())
+  userId            String?
+  user              User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  title             String            @default("My Professional CV")
+  targetJobTitle    String
+  yearsOfExperience Int               @default(0)
+  fullName          String
+  email             String
+  phone             String
+  location          String
+  linkedin          String?
+  portfolio         String?
+  summary           String
+  jobDescription    String?
+  templateCode      String            @default("standard_ats")
+  isPurchased       Boolean           @default(false)
+  pdfFileId         String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  workExperiences   WorkExperience[]
+  educations        Education[]
+  skills            Skill[]
+  certifications    Certification[]
+  languages         Language[]
+  payments          Payment[]
+
+  @@map("cvs")
+}
+
+model WorkExperience {
+  id               String   @id @default(cuid())
+  cvId             String
+  cv               CV       @relation(fields: [cvId], references: [id], onDelete: Cascade)
+  company          String
+  jobTitle         String
+  location         String?
+  startDate        String
+  endDate          String?
+  isCurrent        Boolean  @default(false)
+  responsibilities String   // newline-separated or JSON array of bullet points
+  order            Int      @default(0)
+
+  @@map("work_experiences")
+}
+
+model Education {
+  id           String   @id @default(cuid())
+  cvId         String
+  cv           CV       @relation(fields: [cvId], references: [id], onDelete: Cascade)
+  school       String
+  degree       String
+  fieldOfStudy String
+  startDate    String
+  endDate      String?
+  grade        String?
+  order        Int      @default(0)
+
+  @@map("educations")
+}
+
+model Skill {
+  id       String  @id @default(cuid())
+  cvId     String
+  cv       CV      @relation(fields: [cvId], references: [id], onDelete: Cascade)
+  name     String
+  category String? // "Technical", "Soft", "Tools", etc.
+  order    Int     @default(0)
+
+  @@map("skills")
+}
+
+model Certification {
+  id            String   @id @default(cuid())
+  cvId          String
+  cv            CV       @relation(fields: [cvId], references: [id], onDelete: Cascade)
+  name          String
+  issuer        String
+  issueDate     String?
+  credentialUrl String?
+  order         Int      @default(0)
+
+  @@map("certifications")
+}
+
+model Language {
+  id          String   @id @default(cuid())
+  cvId        String
+  cv          CV       @relation(fields: [cvId], references: [id], onDelete: Cascade)
+  name        String
+  proficiency String   @default("Fluent") // Native, Fluent, Intermediate, Basic
+  order       Int      @default(0)
+
+  @@map("languages")
+}
+
+model AtsScan {
+  id                String       @id @default(cuid())
+  userId            String?
+  user              User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  fileName          String
+  fileSize          Int
+  fileMimeType      String
+  score             Int          // 0 - 100
+  readabilityScore  Int
+  sectionsScore     Int
+  experienceScore   Int
+  skillsScore       Int
+  formattingScore   Int
+  jobMatchScore     Int?
+  jobDescription    String?
+  matchedKeywords   String       // JSON string of string[]
+  missingKeywords   String       // JSON string of string[]
+  issues            String       // JSON string of AtsIssue[]
+  recommendations   String       // JSON string of string[]
+  fileRecordId      String?
+  createdAt         DateTime     @default(now())
+
+  @@map("ats_scans")
+}
+
+model Payment {
+  id                 String         @id @default(cuid())
+  userId             String?
+  user               User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  cvId               String?
+  cv                 CV?            @relation(fields: [cvId], references: [id], onDelete: SetNull)
+  planName           String         @default("Standard CV Download")
+  amountEtb          Float          // in ETB
+  paymentMethod      String         // Telebirr, CBE, Awash, etc.
+  transactionRef     String         @unique
+  screenshotUrl      String?
+  screenshotFileId   String?
+  status             PaymentStatus  @default(PENDING)
+  decisionNotes      String?
+  verifiedBy         String?
+  verifiedAt         DateTime?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  @@map("payments")
+}
+
+model FileRecord {
+  id                 String     @id @default(cuid())
+  userId             String?
+  user               User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name               String
+  mimeType           String
+  size               Int
+  googleDriveFileId  String?
+  localPath          String?
+  folderType         FolderType
+  createdAt          DateTime   @default(now())
+
+  @@map("file_records")
+}
+
+model PricingPlan {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String
+  priceEtb    Float
+  features    String   // JSON string of string[]
+  isPopular   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("pricing_plans")
+}
+
+model AppSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
+model AtsRule {
+  id                     String       @id @default(cuid())
+  code                   String       @unique
+  title                  String
+  category               String       // Contact, Structure, Experience, Education, Skills, Formatting
+  weight                 Int          // 0 to 100
+  enabled                Boolean      @default(true)
+  severity               RuleSeverity @default(WARNING)
+  description            String
+  recommendationTemplate String
+
+  @@map("ats_rules")
+}
+
+model AiPrompt {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  promptText  String
+  model       String   @default("gpt-4o-mini")
+  temperature Float    @default(0.7)
+  maxTokens   Int      @default(1000)
+  description String?
+  isDefault   Boolean  @default(false)
+
+  @@map("ai_prompts")
+}
+
+model CvTemplate {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String
+  isDefault   Boolean  @default(false)
+  previewUrl  String?
+
+  @@map("cv_templates")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action      String   // PAYMENT_APPROVED, PAYMENT_REJECTED, SETTINGS_UPDATED, USER_SUSPENDED, etc.
+  entity      String   // Payment, User, AppSetting, AtsRule
+  entityId    String?
+  details     String?  // JSON string
+  performedBy String   // Admin email or system
+  createdAt   DateTime @default(now())
+
+  @@map("audit_logs")
+}
