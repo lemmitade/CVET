@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rewriteBulletPoint } from "@/lib/ai";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || "local_ip";
+    const rl = checkRateLimit(`ai_bullet_${ip}`, 20, 60000);
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: `Too many AI rewrite requests. Please try again in ${rl.retryAfterSec} seconds.` },
+        { status: 429 }
+      );
+    }
+
     const { bulletPoint, jobTitle } = await req.json();
 
     if (!bulletPoint || !bulletPoint.trim()) {

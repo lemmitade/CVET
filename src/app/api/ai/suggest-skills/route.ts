@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { suggestSkillsForJob } from "@/lib/ai";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || "local_ip";
+    const rl = checkRateLimit(`ai_skills_${ip}`, 20, 60000);
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: `Too many AI skill suggestion requests. Please try again in ${rl.retryAfterSec} seconds.` },
+        { status: 429 }
+      );
+    }
+
     const { targetJobTitle } = await req.json();
 
     if (!targetJobTitle || !targetJobTitle.trim()) {

@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import prisma from "@/lib/prisma";
 import { DEFAULT_ATS_RULES, DEFAULT_AI_PROMPTS, DEFAULT_PRICING_PLANS, DEFAULT_WEBSITE_SETTINGS, DEFAULT_PAYMENT_ACCOUNTS } from "@/lib/default-data";
 import { hashPassword } from "@/lib/auth";
@@ -21,9 +23,25 @@ declare global {
   var memoryStateGlobal: MemoryState | undefined;
 }
 
+const LOCAL_STORE_FILE = path.join(process.cwd(), "uploads", "local_store.json");
+
 function initMemoryState(): MemoryState {
   if (globalThis.memoryStateGlobal) {
     return globalThis.memoryStateGlobal;
+  }
+
+  // 1. Try loading from local file persistence
+  if (fs.existsSync(LOCAL_STORE_FILE)) {
+    try {
+      const data = fs.readFileSync(LOCAL_STORE_FILE, "utf-8");
+      const parsed = JSON.parse(data);
+      if (parsed && Array.isArray(parsed.users)) {
+        globalThis.memoryStateGlobal = parsed;
+        return parsed;
+      }
+    } catch (err) {
+      console.warn("Failed to read local store file, initializing defaults:", err);
+    }
   }
 
   const state: MemoryState = {
@@ -209,6 +227,19 @@ function initMemoryState(): MemoryState {
 
 export const memoryStore = initMemoryState();
 
+// Save in-memory state to disk so data is never lost across server restarts
+export function persistStore(): void {
+  try {
+    const uploadDir = path.dirname(LOCAL_STORE_FILE);
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    fs.writeFileSync(LOCAL_STORE_FILE, JSON.stringify(memoryStore, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Could not persist store to file:", err);
+  }
+}
+
 // Helper to check if database is online
 export async function isDatabaseConnected(): Promise<boolean> {
   const dbUrl =
@@ -229,3 +260,68 @@ export async function isDatabaseConnected(): Promise<boolean> {
     return false;
   }
 }
+
+// Synchronize database records into memoryStore if Neon Postgres is reachable
+export async function syncStoreWithDatabase(): Promise<boolean> {
+  const connected = await isDatabaseConnected();
+  if (!connected) return false;
+
+  try {
+    const [dbUsers, dbRules, dbPlans, dbPrompts, dbSettings] = await Promise.all([
+      prisma.user.findMany(),
+      prisma.atsRule.findMany(),
+      prisma.pricingPlan.findMany(),
+      prisma.aiPrompt.findMany(),
+      prisma.appSetting.findMany(),
+    ]);
+
+    if (dbUsers.length > 0) {
+      for (const u of dbUsers) {
+        const idx = memoryStore.users.findIndex(x => x.id === u.id || x.email === u.email);
+        const mapped = {
+          id: u.id,
+          email: u.email,
+          passwordHash: u.passwordHash,
+          name: u.name,
+          phone: u.phone || undefined,
+          role: u.role as "USER" | "ADMIN",
+          status: u.status as "ACTIVE" | "SUSPENDED",
+          createdAt: u.createdAt,
+        };
+        if (idx !== -1) {
+          memoryStore.users[idx] = mapped;
+        } else {
+          memoryStore.users.push(mapped);
+        }
+      }
+    }
+
+    if (dbRules.length > 0) {
+      memoryStore.atsRules = dbRules;
+    }
+
+    if (dbPlans.length > 0) {
+      memoryStore.pricingPlans = dbPlans.map(p => ({
+        ...p,
+        features: typeof p.features === "string" ? JSON.parse(p.features) : p.features,
+      }));
+    }
+
+    if (dbPrompts.length > 0) {
+      memoryStore.aiPrompts = dbPrompts;
+    }
+
+    if (dbSettings.length > 0) {
+      for (const s of dbSettings) {
+        memoryStore.settings[s.key] = s.value;
+      }
+    }
+
+    persistStore();
+    return true;
+  } catch (err) {
+    console.error("Database synchronization failed:", err);
+    return false;
+  }
+}
+

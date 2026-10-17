@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { improveSummary } from "@/lib/ai";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || "local_ip";
+    const rl = checkRateLimit(`ai_summary_${ip}`, 15, 60000);
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: `Too many AI optimization requests. Please try again in ${rl.retryAfterSec} seconds.` },
+        { status: 429 }
+      );
+    }
+
     const body = await req.json();
     const { currentSummary, targetJobTitle, yearsOfExperience, skills } = body;
 

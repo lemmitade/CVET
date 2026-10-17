@@ -1,9 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { memoryStore } from "@/lib/store";
+import { memoryStore, persistStore, isDatabaseConnected } from "@/lib/store";
 import { hashPassword, signToken } from "@/lib/auth";
+import prisma from "@/lib/prisma";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || "local_ip";
+    const rl = checkRateLimit(`register_${ip}`, 5, 60000);
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: `Too many registration attempts. Please try again in ${rl.retryAfterSec} seconds.` },
+        { status: 429 }
+      );
+    }
+
     const { email, password, name, phone } = await req.json();
 
     if (!email || !password || !name) {
@@ -34,6 +45,25 @@ export async function POST(req: NextRequest) {
     };
 
     memoryStore.users.push(newUser);
+    persistStore();
+
+    try {
+      if (await isDatabaseConnected()) {
+        await prisma.user.create({
+          data: {
+            id: newUser.id,
+            email: newUser.email,
+            name: newUser.name,
+            phone: newUser.phone || null,
+            passwordHash: newUser.passwordHash,
+            role: "USER",
+            status: "ACTIVE",
+          },
+        });
+      }
+    } catch (dbErr) {
+      console.warn("Could not write user to database, persisted to local store:", dbErr);
+    }
 
     const token = signToken({
       userId: newUser.id,

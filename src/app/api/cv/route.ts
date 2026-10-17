@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { memoryStore } from "@/lib/store";
+import { memoryStore, persistStore } from "@/lib/store";
 
 export async function GET(req: NextRequest) {
   try {
@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
     } else {
       memoryStore.cvs.unshift(cvRecord);
     }
+    persistStore();
 
     return NextResponse.json({ success: true, cv: cvRecord });
   } catch (err: any) {

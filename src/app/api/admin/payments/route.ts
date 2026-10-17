@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
-import { memoryStore } from "@/lib/store";
+import { memoryStore, persistStore } from "@/lib/store";
 
 export async function GET(req: NextRequest) {
   const auth = await requireAdmin(req);
@@ -57,6 +57,8 @@ export async function PUT(req: NextRequest) {
       performedBy: auth.user?.email || "admin@cvet.et",
       createdAt: new Date(),
     });
+
+    persistStore();
 
     return NextResponse.json({
       success: true,

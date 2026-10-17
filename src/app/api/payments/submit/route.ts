@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { memoryStore } from "@/lib/store";
+import { memoryStore, persistStore } from "@/lib/store";
 import { getSessionUser } from "@/lib/auth";
 import { uploadFileToStorage } from "@/lib/storage";
 
@@ -96,6 +96,8 @@ export async function POST(req: NextRequest) {
       performedBy: sessionUser?.email || "Guest Customer",
       createdAt: new Date(),
     });
+
+    persistStore();
 
     return NextResponse.json({
       success: true,

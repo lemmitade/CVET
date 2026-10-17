@@ -1,21 +1,44 @@
 import OpenAI from "openai";
 import { memoryStore } from "@/lib/store";
 
-let openaiClient: OpenAI | null = null;
+interface AiClientConfig {
+  client: OpenAI;
+  model: string;
+  provider: "gemini" | "openai";
+}
 
-function getOpenAIClient(): OpenAI | null {
+let cachedAiConfig: AiClientConfig | null = null;
+
+function getAiClient(): AiClientConfig | null {
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_KEY;
+  if (geminiKey && geminiKey.trim() !== "" && !geminiKey.includes("placeholder")) {
+    const client = new OpenAI({
+      apiKey: geminiKey.trim(),
+      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    });
+    return {
+      client,
+      model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
+      provider: "gemini",
+    };
+  }
+
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey || apiKey.trim() === "" || apiKey.includes("sk-placeholder")) {
-    return null;
+  if (apiKey && apiKey.trim() !== "" && !apiKey.includes("placeholder") && !apiKey.includes("sk-...")) {
+    const client = new OpenAI({ apiKey: apiKey.trim() });
+    return {
+      client,
+      model: memoryStore.settings?.aiModelDefault || process.env.OPENAI_MODEL || "gpt-4o-mini",
+      provider: "openai",
+    };
   }
-  if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey });
-  }
-  return openaiClient;
+
+  return null;
 }
 
 export function getActiveAiModel(): string {
-  return memoryStore.settings?.aiModelDefault || process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const ai = getAiClient();
+  return ai ? ai.model : "rule-based-engine";
 }
 
 export async function improveSummary(params: {
@@ -23,16 +46,14 @@ export async function improveSummary(params: {
   targetJobTitle: string;
   yearsOfExperience: number;
   skills: string[];
-}): Promise<{ text: string; source: "openai" | "fallback"; error?: string }> {
-  const openai = getOpenAIClient();
-  const model = getActiveAiModel();
+}): Promise<{ text: string; source: "gemini" | "openai" | "fallback"; error?: string }> {
+  const ai = getAiClient();
 
-  if (!openai) {
-    // Transparently inform that OpenAI key is not configured and return rule-enhanced version
+  if (!ai) {
     return {
       text: generateEnhancedSummaryRuleBased(params),
       source: "fallback",
-      error: "OpenAI API key is not configured in settings. A rule-based enhancement has been applied. Set OPENAI_API_KEY to unlock advanced generative rewriting.",
+      error: "AI API key is not configured in settings. A rule-based enhancement has been applied.",
     };
   }
 
@@ -46,8 +67,8 @@ export async function improveSummary(params: {
       .replace("{skills}", params.skills.join(", ") || "Industry skills")
       .replace("{currentSummary}", params.currentSummary || "");
 
-    const completion = await openai.chat.completions.create({
-      model,
+    const completion = await ai.client.chat.completions.create({
+      model: ai.model,
       messages: [
         {
           role: "system",
@@ -64,12 +85,12 @@ export async function improveSummary(params: {
       throw new Error("Empty response from AI model");
     }
 
-    return { text: result, source: "openai" };
+    return { text: result, source: ai.provider };
   } catch (err: any) {
     return {
       text: generateEnhancedSummaryRuleBased(params),
       source: "fallback",
-      error: `OpenAI API call failed (${err.message || "Network/Auth Error"}). Applied rule-based enhancement.`,
+      error: `${ai.provider.toUpperCase()} API call failed (${err.message || "Error"}). Applied rule-based enhancement.`,
     };
   }
 }
@@ -77,21 +98,20 @@ export async function improveSummary(params: {
 export async function rewriteBulletPoint(params: {
   bulletPoint: string;
   jobTitle?: string;
-}): Promise<{ text: string; source: "openai" | "fallback"; error?: string }> {
-  const openai = getOpenAIClient();
-  const model = getActiveAiModel();
+}): Promise<{ text: string; source: "gemini" | "openai" | "fallback"; error?: string }> {
+  const ai = getAiClient();
 
-  if (!openai) {
+  if (!ai) {
     return {
       text: rewriteBulletRuleBased(params.bulletPoint),
       source: "fallback",
-      error: "OpenAI API key not configured. Applied action-verb optimization.",
+      error: "AI API key not configured. Applied action-verb optimization.",
     };
   }
 
   try {
-    const completion = await openai.chat.completions.create({
-      model,
+    const completion = await ai.client.chat.completions.create({
+      model: ai.model,
       messages: [
         {
           role: "system",
@@ -107,17 +127,44 @@ export async function rewriteBulletPoint(params: {
     });
 
     const result = completion.choices[0]?.message?.content?.trim();
-    return { text: result || params.bulletPoint, source: "openai" };
+    return { text: result || params.bulletPoint, source: ai.provider };
   } catch (err: any) {
     return {
       text: rewriteBulletRuleBased(params.bulletPoint),
       source: "fallback",
-      error: `OpenAI API error: ${err.message}. Applied action-verb rule fallback.`,
+      error: `${ai.provider.toUpperCase()} API error: ${err.message}. Applied action-verb rule fallback.`,
     };
   }
 }
 
 export async function suggestSkillsForJob(targetJobTitle: string): Promise<string[]> {
+  const ai = getAiClient();
+  if (ai) {
+    try {
+      const completion = await ai.client.chat.completions.create({
+        model: ai.model,
+        messages: [
+          {
+            role: "system",
+            content: "You are an ATS recruitment expert. Return a JSON array of 8 to 10 highly relevant ATS skills for the given job title. Return ONLY valid JSON array of strings with no markdown backticks or commentary.",
+          },
+          { role: "user", content: `Job title: ${targetJobTitle}` },
+        ],
+        temperature: 0.3,
+        max_tokens: 200,
+      });
+
+      const content = completion.choices[0]?.message?.content?.trim() || "";
+      const cleaned = content.replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map(String);
+      }
+    } catch {
+      // fallback to dictionary
+    }
+  }
+
   const commonMap: Record<string, string[]> = {
     software: ["TypeScript", "React", "Node.js", "Next.js", "PostgreSQL", "Git", "REST APIs", "Docker", "Problem Solving"],
     developer: ["JavaScript", "Python", "React", "Node.js", "SQL", "Git", "Agile", "API Integration", "Unit Testing"],
